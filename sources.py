@@ -7,7 +7,12 @@ import os
 import posixpath
 import stat
 from pathlib import Path
-
+from openpyxl import load_workbook
+from openpyxl.utils.cell import range_boundaries
+from sqlalchemy import create_engine, text
+from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
+import paramiko
 
 FIELDS = ("ticket_code", "kit_code", "kit_label", "kit_family", "loan_day", "days_out")
 
@@ -30,8 +35,6 @@ def csv_rows(path):
 
 
 def excel_rows(path, sheet="Checkouts", cell_range="A1:F10000"):
-    from openpyxl import load_workbook
-    from openpyxl.utils.cell import range_boundaries
 
     workbook = load_workbook(path, read_only=True, data_only=True)
     try:
@@ -47,7 +50,6 @@ def excel_rows(path, sheet="Checkouts", cell_range="A1:F10000"):
 
 def sql_rows(url, query):
     """Use a read-only database account for external SQL sources."""
-    from sqlalchemy import create_engine, text
 
     engine = create_engine(url)
     try:
@@ -59,9 +61,7 @@ def sql_rows(url, query):
 
 
 def google_rows(spreadsheet_id, cell_range, credentials_path):
-    from google.oauth2.service_account import Credentials
-    from googleapiclient.discovery import build
-
+    
     credentials = Credentials.from_service_account_file(
         credentials_path, scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"]
     )
@@ -74,7 +74,6 @@ def google_rows(spreadsheet_id, cell_range, credentials_path):
 
 def sftp_rows(host, username, key_path, remote_path, known_hosts, port=22, latest=False):
     """Fetch CSV or XLSX with host-key verification and key authentication."""
-    import paramiko
 
     with paramiko.SSHClient() as client:
         client.load_host_keys(known_hosts)

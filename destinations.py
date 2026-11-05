@@ -1,15 +1,13 @@
 """Publish a validated snapshot to SQL Server through SQLAlchemy."""
-
 from pathlib import Path
 import re
-
-
-def refresh_sql_server(rows, url, databases=None):
-    from sqlalchemy import (
+from sqlalchemy import (
         CheckConstraint, Column, ForeignKey, Identity, Integer, MetaData, Table,
         Unicode, create_engine, text,
     )
-    from sqlalchemy.dialects.mssql import DATE
+from sqlalchemy.dialects.mssql import DATE
+
+def refresh_sql_server(rows, url, databases=None):
 
     if databases is None:
         databases = {"staging": "staging", "edw_raw": "edw_raw", "edw": "edw"}
