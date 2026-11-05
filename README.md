@@ -1,6 +1,6 @@
 # Warehouse ETL
 
-A configurable Python ETL example combining CSV, Excel, SQL databases, Google Sheets and SFTP deliveries into a SQLite warehouse. A fictional kit lending library supplies eight checkouts across four kits, totaling 32 loan days.
+A configurable Python ETL example combining CSV, Excel, SQL databases, Google Sheets and SFTP deliveries. The SQL Server pipeline uses separate staging, edw_raw and edw databases and publishes a star schema. A local SQLite demo is included. A fictional kit lending library supplies eight checkouts across four kits, totaling 32 loan days.
 
 ## Run the combined demo
 
@@ -63,24 +63,38 @@ Install Microsoft ODBC Driver 18 for SQL Server on the machine running the pipel
 python -m pip install -r requirements-sqlserver.txt
 ```
 
-Set DESTINATION_DATABASE_URL to a SQLAlchemy SQL Server URL. For Windows integrated authentication in PowerShell, use your own server and an existing dedicated warehouse database.
+Run sql/sqlserver/create_databases.sql once in SQL Server Management Studio as an administrator to create staging, edw_raw and edw. Configure the names in config/warehouse.example.json, or copy it to config/warehouse.local.json for your own database names and adjust the creation script to match.
+
+Set DESTINATION_DATABASE_URL to a SQLAlchemy SQL Server URL on that same instance. For Windows integrated authentication in PowerShell, use your server and the staging database.
 
 ```powershell
-$env:DESTINATION_DATABASE_URL = 'mssql+pyodbc://@localhost/kit_warehouse?driver=ODBC+Driver+18+for+SQL+Server&trusted_connection=yes'
-python run.py --config config/services.local.json --destination-url-env DESTINATION_DATABASE_URL
+$env:DESTINATION_DATABASE_URL = 'mssql+pyodbc://@localhost/staging?driver=ODBC+Driver+18+for+SQL+Server&trusted_connection=yes'
+python run.py --config config/services.local.json --destination-url-env DESTINATION_DATABASE_URL --warehouse-config config/warehouse.example.json
 ```
 
 For the synthetic local sources, run prepare_demo.py and use config/demo.json instead. SQL authentication can also be supplied through an environment variable using a correctly URL-encoded SQLAlchemy connection URL.
 
-The destination writer in destinations.py creates dbo.checkout_stage, dbo.kit_catalog and dbo.kit_loan in the selected database and replaces their rows on each successful refresh. It creates dbo.monthly_lending using sql/sqlserver_report.sql and runs sql/sqlserver_refresh.sql for the transformations. Use a dedicated database because those table names are owned by this example.
+The destination writer in destinations.py runs the layers in order.
 
-The database must already exist. The destination account needs table and view creation/alteration, data read/write permissions and permission to acquire an application lock. SQL Server 2016 SP1 or later supports the report's CREATE OR ALTER VIEW statement. The writer serializes refreshes with a transaction-owned application lock and rolls back failed snapshots. Source and destination connection URLs can point to different servers.
+| Database | Objects | Purpose |
+| --- | --- | --- |
+| staging | dbo.checkout_stage | Combined validated source snapshot, with the source date text preserved |
+| edw_raw | dbo.checkout_snapshot | Detailed records with dates converted to SQL Server DATE |
+| edw | dbo.dim_kit, dbo.dim_date, dbo.fact_kit_loan, dbo.monthly_lending | Dimensions, checkout facts and monthly reporting |
 
-The SQL Server writer has mocked transaction and SQL compilation tests. Live execution requires an available SQL Server, ODBC driver and your connection settings.
+The edw layer uses a star schema. dim_kit has an identity surrogate kit_key and a unique kit_code. dim_date contains each checkout date, with an integer YYYYMMDD key and year, month and day attributes. fact_kit_loan has one row per checkout ticket, foreign keys to both dimensions and the days_out measure. The report joins the fact to its dimensions before aggregating.
+
+sql/sqlserver/edw_raw/load.sql loads the typed snapshot. sql/sqlserver/edw/load.sql rebuilds the dimensions and resolves their keys into the fact. sql/sqlserver/edw/report.sql defines the reporting view. The pipeline creates the tables on its first run.
+
+All three databases must exist on the same SQL Server instance. The destination account needs table and view creation/alteration, data read/write permissions in every layer, and permission to acquire an application lock in staging. SQL Server 2016 SP1 or later supports the report's CREATE OR ALTER VIEW statement. One connection and transaction cover all layers. The staging application lock serializes refreshes, and a failed refresh rolls back all three layers. Source and destination connection URLs can point to different servers.
+
+Each successful run replaces the snapshot, dimensions and facts. Identity kit keys can change between refreshes, and fact keys are resolved again during each load. Date dimension coverage follows the checkout dates in the snapshot. These databases and table names should be dedicated to this example.
+
+The SQL Server writer has mocked transaction, database routing and SQL compilation tests. Live execution requires an available SQL Server, ODBC driver and your connection settings.
 
 ## Transform and report
 
-Adapters extract records and shared validation checks their fields. The combined snapshot enters checkout_stage. The transformations in sql/refresh.sql build kit_catalog and kit_loan, linked by a foreign key. The monthly_lending view aggregates by checkout month and kit family.
+In the local SQLite demo, adapters extract records and shared validation checks their fields. The combined snapshot enters checkout_stage. The transformations in sql/refresh.sql build kit_catalog and kit_loan, linked by a foreign key. The monthly_lending view aggregates by checkout month and kit family.
 
 ```sql
 SELECT loan_month, kit_family, loan_count, loan_days
