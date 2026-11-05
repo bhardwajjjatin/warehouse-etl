@@ -1,0 +1,24 @@
+{
+  "sources": [
+    {
+      "type": "sql",
+      "url_env": "SOURCE_DATABASE_URL",
+      "query_file": "../sql/extract_checkouts.sql"
+    },
+    {
+      "type": "google_sheets",
+      "id_env": "SHEETS_DOCUMENT_ID",
+      "range": "Checkouts!A1:F10000",
+      "credentials_env": "GOOGLE_APPLICATION_CREDENTIALS"
+    },
+    {
+      "type": "sftp",
+      "host_env": "SFTP_HOST",
+      "user_env": "SFTP_USER",
+      "key_env": "SFTP_KEY_PATH",
+      "known_hosts_env": "SFTP_KNOWN_HOSTS",
+      "remote_path": "/incoming",
+      "latest": true
+    }
+  ]
+}

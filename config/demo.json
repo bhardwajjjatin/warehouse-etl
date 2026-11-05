@@ -1,0 +1,27 @@
+{
+  "sources": [
+    {
+      "type": "csv",
+      "path": "../data/demo/desk.csv"
+    },
+    {
+      "type": "excel",
+      "path": "../data/demo/workbook.xlsx",
+      "sheet": "Checkouts",
+      "range": "A1:F3"
+    },
+    {
+      "type": "sql",
+      "path": "../build/source.sqlite",
+      "query_file": "../sql/extract_checkouts.sql"
+    },
+    {
+      "type": "sheets_fixture",
+      "path": "../data/demo/sheets-response.json"
+    },
+    {
+      "type": "csv",
+      "path": "../data/demo/sftp-inbox/checkouts.csv"
+    }
+  ]
+}
