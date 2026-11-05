@@ -1,0 +1,2 @@
+# Include warehouse SQL scripts in GitHub language statistics.
+*.sql linguist-detectable=true
