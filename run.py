@@ -2,6 +2,7 @@
 
 import argparse
 import csv
+import json
 import sqlite3
 from contextlib import closing
 from datetime import date, datetime
@@ -75,12 +76,15 @@ def main():
     targets = parser.add_mutually_exclusive_group()
     targets.add_argument("--database", type=Path, default=ROOT / "build" / "lending.sqlite")
     targets.add_argument("--destination-url-env", help="environment variable holding a SQL Server SQLAlchemy URL")
+    parser.add_argument("--warehouse-config", type=Path, default=ROOT / "config" / "warehouse.example.json",
+                        help="JSON names for the staging, edw_raw and edw databases")
     args = parser.parse_args()
     try:
         source = configured_rows(args.config) if args.config else args.source
         if args.destination_url_env:
             from destinations import refresh_sql_server
-            rows = refresh_sql_server(read_checkouts(source), required_env(args.destination_url_env))
+            databases = json.loads(args.warehouse_config.read_text(encoding="utf-8"))
+            rows = refresh_sql_server(read_checkouts(source), required_env(args.destination_url_env), databases)
         else:
             rows = refresh(source, args.database)
     except Exception:

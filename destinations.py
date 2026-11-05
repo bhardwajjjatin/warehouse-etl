@@ -1,19 +1,31 @@
 """Publish a validated snapshot to SQL Server through SQLAlchemy."""
 
 from pathlib import Path
+import re
 
 
-def refresh_sql_server(rows, url):
+def refresh_sql_server(rows, url, databases=None):
     from sqlalchemy import (
-        CheckConstraint, Column, ForeignKey, Integer, MetaData, Table,
+        CheckConstraint, Column, ForeignKey, Identity, Integer, MetaData, Table,
         Unicode, create_engine, text,
     )
+    from sqlalchemy.dialects.mssql import DATE
 
+    if databases is None:
+        databases = {"staging": "staging", "edw_raw": "edw_raw", "edw": "edw"}
+    if set(databases) != {"staging", "edw_raw", "edw"}:
+        raise ValueError("configure staging, edw_raw and edw database names")
+    if any(not isinstance(name, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", name)
+           for name in databases.values()):
+        raise ValueError("database names must be simple SQL identifiers")
+    if len({name.casefold() for name in databases.values()}) != 3:
+        raise ValueError("each warehouse layer needs a different database")
     engine = create_engine(url, hide_parameters=True)
     try:
         if engine.dialect.name != "mssql":
             raise ValueError("the destination URL must use a SQL Server dialect")
-        metadata = MetaData(schema="dbo")
+        metadata = MetaData()
+        staging_schema = raw_schema = edw_schema = "dbo"
         stage = Table(
             "checkout_stage", metadata,
             Column("ticket_code", Unicode(160), primary_key=True),
@@ -23,33 +35,61 @@ def refresh_sql_server(rows, url):
             Column("loan_day", Unicode(10), nullable=False),
             Column("days_out", Integer, nullable=False),
             CheckConstraint("days_out > 0"),
+            schema=staging_schema,
         )
-        Table(
-            "kit_catalog", metadata,
-            Column("kit_code", Unicode(160), primary_key=True),
+        raw = Table(
+            "checkout_snapshot", metadata,
+            Column("ticket_code", Unicode(160), primary_key=True),
+            Column("kit_code", Unicode(160), nullable=False),
             Column("kit_label", Unicode(250), nullable=False),
             Column("kit_family", Unicode(160), nullable=False),
-        )
-        Table(
-            "kit_loan", metadata,
-            Column("ticket_code", Unicode(160), primary_key=True),
-            Column("kit_code", Unicode(160), ForeignKey("dbo.kit_catalog.kit_code"), nullable=False),
-            Column("loan_day", Unicode(10), nullable=False),
+            Column("loan_day", DATE, nullable=False),
             Column("days_out", Integer, nullable=False),
             CheckConstraint("days_out > 0"),
+            schema=raw_schema,
+        )
+        catalog = Table(
+            "dim_kit", metadata,
+            Column("kit_key", Integer, Identity(), primary_key=True),
+            Column("kit_code", Unicode(160), nullable=False, unique=True),
+            Column("kit_label", Unicode(250), nullable=False),
+            Column("kit_family", Unicode(160), nullable=False),
+            schema=edw_schema,
+        )
+        dates = Table(
+            "dim_date", metadata,
+            Column("date_key", Integer, primary_key=True, autoincrement=False),
+            Column("calendar_date", DATE, nullable=False, unique=True),
+            Column("calendar_year", Integer, nullable=False),
+            Column("calendar_month", Integer, nullable=False),
+            Column("calendar_day", Integer, nullable=False),
+            schema=edw_schema,
+        )
+        loans = Table(
+            "fact_kit_loan", metadata,
+            Column("ticket_code", Unicode(160), primary_key=True),
+            Column("kit_key", Integer, ForeignKey("dbo.dim_kit.kit_key"), nullable=False),
+            Column("loan_date_key", Integer, ForeignKey("dbo.dim_date.date_key"), nullable=False),
+            Column("days_out", Integer, nullable=False),
+            CheckConstraint("days_out > 0"),
+            schema=edw_schema,
         )
         root = Path(__file__).resolve().parent
         with engine.begin() as connection:
             # Serialize refreshes, including first-time table creation.
-            connection.execute(text("""
+            connection.execute(text(f"""
                 DECLARE @result int;
-                EXEC @result = sys.sp_getapplock
+                EXEC @result = [{databases["staging"]}].sys.sp_getapplock
                     @Resource = 'pocket_warehouse_refresh',
                     @LockMode = 'Exclusive', @LockOwner = 'Transaction',
                     @LockTimeout = 60000;
                 IF @result < 0 THROW 50000, 'Warehouse refresh lock unavailable', 1;
             """))
-            metadata.create_all(connection)
+            # Scope DDL to each database so foreign keys use local two-part names.
+            for layer, tables in (("staging", [stage]), ("edw_raw", [raw]), ("edw", [catalog, dates, loans])):
+                connection.execute(text(f"USE [{databases[layer]}]"))
+                metadata.create_all(connection, tables=tables)
+            connection.execute(text(f"USE [{databases['staging']}]"))
             connection.execute(stage.delete())
             fields = list(stage.columns.keys())
             for row in rows:
@@ -59,14 +99,22 @@ def refresh_sql_server(rows, url):
                     if limit and len(record[column.name]) > limit:
                         raise ValueError(f"{column.name} exceeds {limit} characters")
                 connection.execute(stage.insert(), record)
-            for statement in (root / "sql" / "sqlserver_refresh.sql").read_text(encoding="utf-8").split(";"):
-                if statement.strip():
-                    connection.execute(text(statement))
+            parameters = {layer: "[" + name + "].dbo" for layer, name in databases.items()}
+            for layer in ("edw_raw", "edw"):
+                sql = (root / "sql" / "sqlserver" / layer / "load.sql").read_text(encoding="utf-8")
+                for statement in sql.format(**parameters).split(";"):
+                    if statement.strip():
+                        connection.execute(text(statement))
             # SQL Server requires CREATE VIEW to be the first statement in a batch.
-            connection.execute(text((root / "sql" / "sqlserver_report.sql").read_text(encoding="utf-8")))
+            # CREATE VIEW is scoped to its current database. sp_executesql runs
+            # the isolated view batch in edw while keeping the same transaction.
+            report = (root / "sql" / "sqlserver" / "edw" / "report.sql").read_text(encoding="utf-8")
+            connection.execute(text(
+                f"EXEC [{databases['edw']}].sys.sp_executesql N'" + report.replace("'", "''") + "'"
+            ))
             return connection.execute(text(
                 "SELECT loan_month, kit_family, loan_count, loan_days "
-                "FROM dbo.monthly_lending ORDER BY loan_month, kit_family"
+                f"FROM [{databases['edw']}].dbo.monthly_lending ORDER BY loan_month, kit_family"
             )).fetchall()
     finally:
         engine.dispose()
