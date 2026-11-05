@@ -1,0 +1,9 @@
+ticket_code,kit_code,kit_label,kit_family,loan_day,days_out
+T001,K01,Paper Planets,Astronomy,2025-04-02,4
+T002,K02,Rhythm Tiles,Music,2025-04-07,3
+T003,K01,Paper Planets,Astronomy,2025-04-18,6
+T004,K03,Seed Sorter,Botany,2025-04-25,2
+T005,K02,Rhythm Tiles,Music,2025-05-01,7
+T006,K03,Seed Sorter,Botany,2025-05-05,5
+T007,K04,Shadow Clock,Astronomy,2025-05-15,3
+T008,K01,Paper Planets,Astronomy,2025-05-27,2

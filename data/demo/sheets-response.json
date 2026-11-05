@@ -1,0 +1,22 @@
+{
+  "range": "Checkouts!A1:F2",
+  "majorDimension": "ROWS",
+  "values": [
+    [
+      "ticket_code",
+      "kit_code",
+      "kit_label",
+      "kit_family",
+      "loan_day",
+      "days_out"
+    ],
+    [
+      "T007",
+      "K04",
+      "Shadow Clock",
+      "Astronomy",
+      "2025-05-15",
+      "3"
+    ]
+  ]
+}
