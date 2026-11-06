@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 from sqlalchemy.dialects import mssql
 from sqlalchemy.schema import CreateTable
 
-from destinations import refresh_sql_server
+from utils.db import refresh_sql_server
 
 
 class SqlServerTests(unittest.TestCase):
@@ -12,8 +12,9 @@ class SqlServerTests(unittest.TestCase):
         engine = MagicMock()
         engine.dialect.name = "mssql"
         connection = engine.begin.return_value.__enter__.return_value
+        connection.execute.return_value.scalar.return_value = 0
         record = ("T100", "K10", "Sample Kit", "Music", "2025-01-01", 3)
-        with patch("sqlalchemy.create_engine", return_value=engine):
+        with patch("utils.db.create_engine", return_value=engine):
             with patch("sqlalchemy.MetaData.create_all", autospec=True) as create:
                 refresh_sql_server(iter([record]), "mssql+pyodbc://")
         metadata = create.call_args.args[0]
@@ -44,7 +45,7 @@ class SqlServerTests(unittest.TestCase):
         edw_load = next(i for i, sql in enumerate(statements) if "INSERT INTO [edw].dbo.dim_kit" in sql)
         self.assertLess(raw_load, edw_load)
         self.assertIn("FROM [staging].dbo.checkout_stage", statements[raw_load])
-        self.assertIn("EXEC [edw].sys.sp_executesql", statements[-2])
+        self.assertTrue(any("EXEC [edw].sys.sp_executesql" in sql for sql in statements))
         self.assertIn("FROM [edw].dbo.monthly_lending", statements[-1])
         engine.begin.return_value.__exit__.assert_called_once_with(None, None, None)
         engine.dispose.assert_called_once()
@@ -55,7 +56,7 @@ class SqlServerTests(unittest.TestCase):
             {"staging": "shared", "edw_raw": "SHARED", "edw": "edw"},
             {"staging": "stage]; DROP DATABASE edw", "edw_raw": "raw", "edw": "edw"},
         ):
-            with self.subTest(names=names), patch("sqlalchemy.create_engine") as create:
+            with self.subTest(names=names), patch("utils.db.create_engine") as create:
                 with self.assertRaises(ValueError):
                     refresh_sql_server([], "mssql+pyodbc://", names)
                 create.assert_not_called()
@@ -68,7 +69,7 @@ class SqlServerTests(unittest.TestCase):
         engine = MagicMock()
         engine.dialect.name = "mssql"
         engine.begin.return_value.__exit__.return_value = False
-        with patch("sqlalchemy.create_engine", return_value=engine):
+        with patch("utils.db.create_engine", return_value=engine):
             with patch("sqlalchemy.MetaData.create_all"):
                 with self.assertRaises(OSError):
                     refresh_sql_server(broken_rows(), "mssql+pyodbc://")
@@ -78,8 +79,37 @@ class SqlServerTests(unittest.TestCase):
     def test_rejects_another_destination_dialect(self):
         engine = MagicMock()
         engine.dialect.name = "sqlite"
-        with patch("sqlalchemy.create_engine", return_value=engine):
+        with patch("utils.db.create_engine", return_value=engine):
             with self.assertRaises(ValueError):
                 refresh_sql_server([], "sqlite://")
         engine.begin.assert_not_called()
         engine.dispose.assert_called_once()
+
+    def test_edw_can_run_without_extracting_sources(self):
+        def unrequested_source():
+            raise AssertionError("an EDW run must use the existing raw snapshot")
+            yield
+
+        engine = MagicMock()
+        engine.dialect.name = "mssql"
+        connection = engine.begin.return_value.__enter__.return_value
+        connection.execute.return_value.scalar.return_value = 0
+        with patch("utils.db.create_engine", return_value=engine):
+            with patch("sqlalchemy.MetaData.create_all"):
+                refresh_sql_server(unrequested_source(), "mssql+pyodbc://", pipeline="edw")
+        statements = [str(call.args[0]) for call in connection.execute.call_args_list]
+        self.assertTrue(any("INSERT INTO [edw].dbo.fact_kit_loan" in sql for sql in statements))
+        self.assertFalse(any("INSERT INTO [edw_raw]" in sql for sql in statements))
+        self.assertFalse(any("DELETE FROM dbo.checkout_stage" in sql for sql in statements))
+
+    def test_quality_failure_aborts_the_transaction(self):
+        engine = MagicMock()
+        engine.dialect.name = "mssql"
+        engine.begin.return_value.__exit__.return_value = False
+        connection = engine.begin.return_value.__enter__.return_value
+        connection.execute.return_value.scalar.return_value = 1
+        with patch("utils.db.create_engine", return_value=engine):
+            with patch("sqlalchemy.MetaData.create_all"):
+                with self.assertRaisesRegex(ValueError, "quality check failed"):
+                    refresh_sql_server([], "mssql+pyodbc://", pipeline="edw_raw")
+        self.assertIs(engine.begin.return_value.__exit__.call_args.args[0], ValueError)

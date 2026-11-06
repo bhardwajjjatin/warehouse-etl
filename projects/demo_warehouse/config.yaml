@@ -1,0 +1,13 @@
+type: project
+name: demo_warehouse
+databases:
+  staging: staging
+  edw_raw: edw_raw
+  edw: edw
+pipelines:
+  - name: staging
+    dir: pipelines/staging
+  - name: edw_raw
+    dir: pipelines/edw_raw
+  - name: edw
+    dir: pipelines/edw

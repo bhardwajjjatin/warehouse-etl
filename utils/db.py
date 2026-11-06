@@ -7,7 +7,27 @@ from sqlalchemy import (
     )
 from sqlalchemy.dialects.mssql import DATE
 
-def refresh_sql_server(rows, url, databases=None):
+def load_rows(connection, stage, rows):
+    fields = list(stage.columns.keys())
+    for row in rows:
+        record = dict(zip(fields, row))
+        for column in stage.columns:
+            limit = getattr(column.type, "length", None)
+            if limit and len(record[column.name]) > limit:
+                raise ValueError(f"{column.name} exceeds {limit} characters")
+        connection.execute(stage.insert(), record)
+
+
+def refresh_sql_server(rows, url, databases=None, project=None, pipeline="all", prepare_demo=False):
+    from pipelines.base import run_pipeline
+    from utils.utils import load_config
+    project = Path(project) if project else Path(__file__).resolve().parents[1] / "projects/demo_warehouse"
+    project_config = load_config(project / "config.yaml")
+    selected = project_config["pipelines"]
+    if pipeline != "all":
+        selected = [item for item in selected if item["name"] == pipeline]
+    if not selected:
+        raise ValueError("unknown pipeline")
 
     if databases is None:
         databases = {"staging": "staging", "edw_raw": "edw_raw", "edw": "edw"}
@@ -72,7 +92,6 @@ def refresh_sql_server(rows, url, databases=None):
             CheckConstraint("days_out > 0"),
             schema=edw_schema,
         )
-        root = Path(__file__).resolve().parent
         with engine.begin() as connection:
             # Serialize refreshes, including first-time table creation.
             connection.execute(text(f"""
@@ -88,28 +107,15 @@ def refresh_sql_server(rows, url, databases=None):
                 connection.execute(text(f"USE [{databases[layer]}]"))
                 metadata.create_all(connection, tables=tables)
             connection.execute(text(f"USE [{databases['staging']}]"))
-            connection.execute(stage.delete())
-            fields = list(stage.columns.keys())
-            for row in rows:
-                record = dict(zip(fields, row))
-                for column in stage.columns:
-                    limit = getattr(column.type, "length", None)
-                    if limit and len(record[column.name]) > limit:
-                        raise ValueError(f"{column.name} exceeds {limit} characters")
-                connection.execute(stage.insert(), record)
             parameters = {layer: "[" + name + "].dbo" for layer, name in databases.items()}
-            for layer in ("edw_raw", "edw"):
-                sql = (root / "sql" / "sqlserver" / layer / "load.sql").read_text(encoding="utf-8")
-                for statement in sql.format(**parameters).split(";"):
-                    if statement.strip():
-                        connection.execute(text(statement))
-            # SQL Server requires CREATE VIEW to be the first statement in a batch.
-            # CREATE VIEW is scoped to its current database. sp_executesql runs
-            # the isolated view batch in edw while keeping the same transaction.
-            report = (root / "sql" / "sqlserver" / "edw" / "report.sql").read_text(encoding="utf-8")
-            connection.execute(text(
-                f"EXEC [{databases['edw']}].sys.sp_executesql N'" + report.replace("'", "''") + "'"
-            ))
+            context = {"stage": stage, "rows": rows, "databases": databases,
+                       "prepare_demo": prepare_demo, "project": project}
+            for layer in selected:
+                if layer["name"] == "staging":
+                    connection.execute(stage.delete())
+                run_pipeline(connection, project / layer["dir"], context, parameters)
+            if not any(layer["name"] == "edw" for layer in selected):
+                return []
             return connection.execute(text(
                 "SELECT loan_month, kit_family, loan_count, loan_days "
                 f"FROM [{databases['edw']}].dbo.monthly_lending ORDER BY loan_month, kit_family"

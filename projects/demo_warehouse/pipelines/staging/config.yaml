@@ -1,0 +1,15 @@
+type: pipeline
+name: staging
+scripts:
+  set_1:
+    - name: Prepare synthetic SQL source
+      type: py
+      file: py/prepare_demo.py
+  set_2:
+    - name: Load configured sources
+      type: py
+      file: py/load_checkouts.py
+tests:
+  row_check:
+    - name: Validate staged durations
+      file: tests/check_durations.sql

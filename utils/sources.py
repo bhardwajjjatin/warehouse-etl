@@ -112,7 +112,8 @@ def required_env(name):
 def configured_rows(config_path):
     """Resolve local paths relative to the configuration, then extract in order."""
     config_path = Path(config_path).resolve()
-    config = json.loads(config_path.read_text(encoding="utf-8"))
+    from utils.utils import load_config
+    config = load_config(config_path)
     sources = config["sources"]
     if not sources:
         raise ValueError("configure at least one source")

@@ -1,0 +1,29 @@
+type: pipeline
+name: edw
+scripts:
+  set_1:
+    - name: Clear previous snapshot
+      type: sql
+      file: sql/clear_snapshot.sql
+  set_2:
+    - name: Load kit dimension
+      type: sql
+      file: sql/load_dim_kit.sql
+    - name: Load date dimension
+      type: sql
+      file: sql/load_dim_date.sql
+  set_3:
+    - name: Load checkout facts
+      type: sql
+      file: sql/load_fact_kit_loan.sql
+  set_4:
+    - name: Publish monthly report
+      type: view
+      file: sql/report.sql
+tests:
+  row_check:
+    - name: Reconcile raw and fact counts
+      file: tests/check_fact_count.sql
+  key_check:
+    - name: Validate dimension references
+      file: tests/check_dimension_keys.sql

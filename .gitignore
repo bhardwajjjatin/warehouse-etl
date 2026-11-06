@@ -7,3 +7,5 @@ build/
 secrets/
 *.inspect.ndjson
 config/*.local.json
+*.local.json
+*.local.yaml

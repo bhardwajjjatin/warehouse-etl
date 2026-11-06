@@ -4,7 +4,7 @@ from contextlib import closing
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from run import ROOT, refresh
+from pipelines.base import ROOT, PROJECT, refresh
 
 
 class WarehouseTests(unittest.TestCase):
@@ -13,7 +13,7 @@ class WarehouseTests(unittest.TestCase):
         self.addCleanup(temp.cleanup)
         self.database = Path(temp.name) / "warehouse.sqlite"
         self.source = Path(temp.name) / "input.csv"
-        self.fixture = (ROOT / "data" / "checkouts.csv").read_text(encoding="utf-8")
+        self.fixture = (PROJECT / "data" / "checkouts.csv").read_text(encoding="utf-8")
         self.source.write_text(self.fixture, encoding="utf-8")
 
     def snapshot(self):

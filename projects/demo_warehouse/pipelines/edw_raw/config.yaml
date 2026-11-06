@@ -1,0 +1,11 @@
+type: pipeline
+name: edw_raw
+scripts:
+  set_1:
+    - name: Load typed checkout snapshot
+      type: sql
+      file: sql/load.sql
+tests:
+  row_check:
+    - name: Reconcile staging and raw counts
+      file: tests/check_row_count.sql

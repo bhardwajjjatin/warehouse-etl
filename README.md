@@ -1,113 +1,149 @@
 # Warehouse ETL
 
-A configurable Python ETL example combining CSV, Excel, SQL databases, Google Sheets and SFTP deliveries. The SQL Server pipeline uses separate staging, edw_raw and edw databases and publishes a star schema. A local SQLite demo is included. A fictional kit lending library supplies eight checkouts across four kits, totaling 32 loan days.
+A generic ETL project organized around shared pipeline and utility modules, with project-specific staging, edw_raw and edw pipelines. CSV, Excel, SQL databases, Google Sheets and SFTP feed a fictional kit lending warehouse. The sample contains eight checkouts, four kits and 32 loan days.
 
-## Run the combined demo
+## Folder structure
+
+```text
+warehouse-etl/
+├── pipelines/
+│   ├── __init__.py
+│   ├── base.py
+│   └── tests/
+├── projects/
+│   └── demo_warehouse/
+│       ├── config.yaml
+│       ├── data/
+│       │   ├── checkouts.csv
+│       │   └── demo/
+│       └── pipelines/
+│           ├── staging/
+│           │   ├── config.yaml
+│           │   ├── sources.demo.json
+│           │   ├── sources.services.example.json
+│           │   ├── py/
+│           │   │   ├── prepare_demo.py
+│           │   │   └── load_checkouts.py
+│           │   ├── sql/
+│           │   │   ├── create_databases.sql
+│           │   │   ├── extract_checkouts.sql
+│           │   │   └── sqlite_schema.sql
+│           │   └── tests/
+│           ├── edw_raw/
+│           │   ├── config.yaml
+│           │   ├── sql/load.sql
+│           │   └── tests/
+│           └── edw/
+│               ├── config.yaml
+│               ├── sql/
+│               │   ├── clear_snapshot.sql
+│               │   ├── load_dim_kit.sql
+│               │   ├── load_dim_date.sql
+│               │   ├── load_fact_kit_loan.sql
+│               │   ├── report.sql
+│               │   └── sqlite_load.sql
+│               └── tests/
+├── utils/
+│   ├── __init__.py
+│   ├── db.py
+│   ├── sources.py
+│   └── utils.py
+├── run.py
+├── requirements.txt
+└── requirements-sqlserver.txt
+```
+
+Project config.yaml defines database names and pipeline order. Each pipeline config.yaml lists script sets and SQL quality checks. The shared runner executes sets and scripts sequentially, using the same SQL Server transaction. Python scripts expose main(connection, context, params). SQL scripts use the configured database names. Each quality query returns zero violations for a successful check.
+
+## Run the local demo
 
 Use Python 3.10 or later from the repository root.
 
 ```sh
 python -m pip install -r requirements.txt
-python prepare_demo.py
-python run.py --config config/demo.json
+python run.py demo_warehouse all
 ```
 
-Preparation creates a synthetic SQLite source. The pipeline creates `build/lending.sqlite` and prints monthly loan counts and loan days.
+This command prepares the fictional SQL source in build/source.sqlite and writes the local demo report to build/lending.sqlite. The local SQLite backend runs the complete snapshot.
 
-| Input | Demo records | Implementation |
+| Input | Demo records | Extraction |
 | --- | --- | --- |
-| CSV | T001–T002 | Local file with a header |
-| Excel | T003–T004 | XLSX sheet and configured cell range |
-| SQL database | T005–T006 | SQLAlchemy connection and an extraction SQL file |
-| Google Sheets | T007 | Local JSON fixture matching the Sheets values response |
-| SFTP delivery | T008 | Local inbox CSV fixture |
+| CSV | T001–T002 | Local header and values |
+| Excel | T003–T004 | Checkouts sheet and configured range |
+| SQL | T005–T006 | Synthetic SQLite source and extraction SQL |
+| Google Sheets | T007 | JSON fixture matching a values response |
+| SFTP | T008 | Local inbox CSV fixture |
 
-The Google Sheets and SFTP demo entries run offline. Live adapters are available through the service configuration. Every sample file contains fictional records. The workbook has a single Checkouts sheet with two records, typed dates and numeric durations.
+Google Sheets and SFTP have live adapters in utils/sources.py. Their demo fixtures run offline. The workbook contains typed dates and numeric durations.
 
-## Configure sources
-
-`config/demo.json` lists sources to combine. Paths resolve relative to the configuration. Each source returns six fields in this order.
-
-```text
-ticket_code,kit_code,kit_label,kit_family,loan_day,days_out
-```
-
-Use distinct ticket codes across sources. Excel dates can be native date cells. Text dates use ISO YYYY-MM-DD. Durations must be positive whole numbers. Sheets rows with omitted trailing cells are padded and validated.
-
-Copy `config/services.example.json` to `config/services.local.json`, edit the source entries you need and set their named environment variables.
+For a separate CSV snapshot:
 
 ```sh
-python run.py --config config/services.local.json
+python run.py demo_warehouse all --source projects/demo_warehouse/data/checkouts.csv --database build/example.sqlite
 ```
 
-| Connector | Settings |
-| --- | --- |
-| SQL | SOURCE_DATABASE_URL supplies a SQLAlchemy URL. Install the matching driver for SQL Server, MySQL or another engine. The demo uses SQLite. Customize the extraction SQL to select and alias the six contract fields. Use a read-only account. |
-| Google Sheets | SHEETS_DOCUMENT_ID identifies a spreadsheet shared with the service account. GOOGLE_APPLICATION_CREDENTIALS points to its JSON key file. The adapter requests the configured range with read-only scope. |
-| SFTP | SFTP_HOST, SFTP_USER, SFTP_KEY_PATH and SFTP_KNOWN_HOSTS configure key authentication and trusted host keys. Download an explicit remote_path, or set latest to true to choose the latest CSV/XLSX in a folder by modification time. XLSX deliveries use the Checkouts sheet. |
+## Run SQL Server pipelines
 
-SFTP retrieval keeps remote files in place. Store keys and service account files outside the repository. Git ignores local configurations, environment files, secrets directories, generated databases and build files.
-
-The smaller CSV entry point is also available.
-
-```sh
-python run.py
-python run.py --source example.csv --database build/example.sqlite
-```
-
-## Load into SQL Server
-
-Install Microsoft ODBC Driver 18 for SQL Server on the machine running the pipeline, then install the Python dependencies.
+Install Microsoft ODBC Driver 18 for SQL Server and the Python dependencies.
 
 ```sh
 python -m pip install -r requirements-sqlserver.txt
 ```
 
-Run sql/sqlserver/create_databases.sql once in SQL Server Management Studio as an administrator to create staging, edw_raw and edw. Configure the names in config/warehouse.example.json, or copy it to config/warehouse.local.json for your own database names and adjust the creation script to match.
+Run projects/demo_warehouse/pipelines/staging/sql/create_databases.sql once as an administrator in SSMS. It creates staging, edw_raw and edw. Their names are configured in projects/demo_warehouse/config.yaml. If you use different names, adjust the creation script and configuration together.
 
-Set DESTINATION_DATABASE_URL to a SQLAlchemy SQL Server URL on that same instance. For Windows integrated authentication in PowerShell, use your server and the staging database.
+All three databases must be on the same SQL Server instance. Configure the destination connection in an environment variable. For Windows integrated authentication in PowerShell:
 
 ```powershell
 $env:DESTINATION_DATABASE_URL = 'mssql+pyodbc://@localhost/staging?driver=ODBC+Driver+18+for+SQL+Server&trusted_connection=yes'
-python run.py --config config/services.local.json --destination-url-env DESTINATION_DATABASE_URL --warehouse-config config/warehouse.example.json
+python run.py demo_warehouse all --destination-url-env DESTINATION_DATABASE_URL
 ```
 
-For the synthetic local sources, run prepare_demo.py and use config/demo.json instead. SQL authentication can also be supplied through an environment variable using a correctly URL-encoded SQLAlchemy connection URL.
+The destination account needs table and view creation/alteration, data read/write access across the three databases and permission to acquire an application lock in staging. SQL Server 2016 SP1 or later supports the reporting view definition.
 
-The destination writer in destinations.py runs the layers in order.
+Individual layers can also run against an existing warehouse snapshot.
 
-| Database | Objects | Purpose |
+```sh
+python run.py demo_warehouse staging --destination-url-env DESTINATION_DATABASE_URL
+python run.py demo_warehouse edw_raw --destination-url-env DESTINATION_DATABASE_URL
+python run.py demo_warehouse edw --destination-url-env DESTINATION_DATABASE_URL
+```
+
+| Database | Tables | Role |
 | --- | --- | --- |
-| staging | dbo.checkout_stage | Combined validated source snapshot, with the source date text preserved |
-| edw_raw | dbo.checkout_snapshot | Detailed records with dates converted to SQL Server DATE |
-| edw | dbo.dim_kit, dbo.dim_date, dbo.fact_kit_loan, dbo.monthly_lending | Dimensions, checkout facts and monthly reporting |
+| staging | dbo.checkout_stage | Combined validated source records |
+| edw_raw | dbo.checkout_snapshot | Detailed records with SQL Server DATE values |
+| edw | dbo.dim_kit, dbo.dim_date, dbo.fact_kit_loan | Star schema |
+| edw | dbo.monthly_lending | Reporting view |
 
-The edw layer uses a star schema. dim_kit has an identity surrogate kit_key and a unique kit_code. dim_date contains each checkout date, with an integer YYYYMMDD key and year, month and day attributes. fact_kit_loan has one row per checkout ticket, foreign keys to both dimensions and the days_out measure. The report joins the fact to its dimensions before aggregating.
+dim_kit uses an identity surrogate key and a unique business kit code. dim_date uses an integer YYYYMMDD key and calendar attributes. fact_kit_loan has one row per checkout ticket, references both dimensions and stores days_out. Date coverage follows the checkout dates in the source snapshot.
 
-sql/sqlserver/edw_raw/load.sql loads the typed snapshot. sql/sqlserver/edw/load.sql rebuilds the dimensions and resolves their keys into the fact. sql/sqlserver/edw/report.sql defines the reporting view. The pipeline creates the tables on its first run.
+A successful run replaces the selected layers' complete snapshots. Dimension identity keys can change, and the fact load resolves them again. The staging application lock serializes refreshes. All selected SQL Server layers run in one transaction, and failures in extraction, transformation or SQL quality checks roll back the transaction. Separate layer invocations each have their own transaction.
 
-All three databases must exist on the same SQL Server instance. The destination account needs table and view creation/alteration, data read/write permissions in every layer, and permission to acquire an application lock in staging. SQL Server 2016 SP1 or later supports the report's CREATE OR ALTER VIEW statement. One connection and transaction cover all layers. The staging application lock serializes refreshes, and a failed refresh rolls back all three layers. Source and destination connection URLs can point to different servers.
+## Connect live sources
 
-Each successful run replaces the snapshot, dimensions and facts. Identity kit keys can change between refreshes, and fact keys are resolved again during each load. Date dimension coverage follows the checkout dates in the snapshot. These databases and table names should be dedicated to this example.
+Copy projects/demo_warehouse/pipelines/staging/sources.services.example.json to sources.services.local.json in the same directory and edit the entries you need. Source paths resolve relative to that configuration file. Every source must supply these fields in order.
 
-The SQL Server writer has mocked transaction, database routing and SQL compilation tests. Live execution requires an available SQL Server, ODBC driver and your connection settings.
-
-## Transform and report
-
-In the local SQLite demo, adapters extract records and shared validation checks their fields. The combined snapshot enters checkout_stage. The transformations in sql/refresh.sql build kit_catalog and kit_loan, linked by a foreign key. The monthly_lending view aggregates by checkout month and kit family.
-
-```sql
-SELECT loan_month, kit_family, loan_count, loan_days
-FROM monthly_lending
-ORDER BY loan_month, kit_family;
+```text
+ticket_code,kit_code,kit_label,kit_family,loan_day,days_out
 ```
 
-April's two Astronomy loans total ten loan days. A loan contributes its full duration to its checkout month. Every successful run replaces the complete snapshot in one transaction. Duplicate tickets, conflicting kit descriptions, invalid records and extraction failures roll back the refresh. Sources are extracted sequentially, so their snapshots reflect their individual extraction times.
+| Connector | Environment settings |
+| --- | --- |
+| SQL | SOURCE_DATABASE_URL holds a SQLAlchemy URL. Install the database driver for your source engine and use a read-only account. The extraction SQL selects and aliases the six fields. |
+| Google Sheets | SHEETS_DOCUMENT_ID identifies the spreadsheet shared with the service account. GOOGLE_APPLICATION_CREDENTIALS points to its JSON key file. The reader requests the configured range with read-only scope. |
+| SFTP | SFTP_HOST, SFTP_USER, SFTP_KEY_PATH and SFTP_KNOWN_HOSTS configure key authentication and host verification. Download an explicit path or the latest CSV/XLSX file by modification time. XLSX deliveries use the Checkouts sheet. |
+
+```sh
+python run.py demo_warehouse all --config projects/demo_warehouse/pipelines/staging/sources.services.local.json --destination-url-env DESTINATION_DATABASE_URL
+```
+
+Use distinct ticket codes across sources. Text dates use YYYY-MM-DD and native Excel dates are accepted. Loan durations must be positive whole numbers. Conflicting kit descriptions and duplicate tickets fail the load. SFTP retrieval keeps remote files in place. Store credentials outside the repository. Git ignores local configuration files, environment files, secrets directories and generated build files.
 
 ## Verify
 
 ```sh
-python -m unittest discover -s tests -v
+python -m unittest discover -s pipelines/tests -v
 ```
 
-Tests exercise real local CSV, XLSX and SQLite extraction, combined reporting, repeated loads, snapshot replacement and rollback. Google Sheets requests and SFTP downloads use mocked clients, including latest-file selection, CSV/XLSX parsing and host-key policy. Live service access requires your own configuration and credentials.
+The suite covers local CSV, XLSX and SQLite extraction, shared validation, repeat loads, rollback, SQL Server database routing and schema compilation. Google Sheets, SFTP and SQL Server service connections use mocks. Live database and service execution requires your own connection settings and credentials.
